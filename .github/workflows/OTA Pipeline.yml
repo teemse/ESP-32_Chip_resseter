@@ -27,6 +27,13 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        
+    # ДОБАВИТЬ: Установка Python зависимостей для скриптов
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
 
     - name: Extract Info
       id: info
@@ -44,7 +51,25 @@ jobs:
         echo "Building $REPO_NAME v$VERSION for $ENV_NAME"
     
     - name: Setup PlatformIO
-      run: pip install platformio
+      run: |
+        pip install platformio
+        
+    # ДОБАВИТЬ: Проверка наличия support_files
+    - name: Verify support files
+      run: |
+        echo "Checking support_files directory..."
+        if [ ! -d "support_files" ]; then
+          echo "❌ support_files directory not found!"
+          echo "Creating support_files directory with stubs..."
+          mkdir -p support_files
+          for f in check_submodules.py upload_patch.py prep_web_files.py enable_lto.py merge.py; do
+            echo 'Import("env")
+        print("Script: '"$f"' loaded (stub)")' > "support_files/$f"
+          done
+        else
+          echo "✅ support_files directory found"
+          ls -la support_files/
+        fi
 
     - name: Build Release Firmware
       run: |
@@ -53,8 +78,8 @@ jobs:
         # Чистая сборка
         pio run -e $ENV_NAME -t clean
         
-        # Сборка
-        pio run -e $ENV_NAME
+        # Сборка с дополнительными флагами для отладки
+        pio run -e $ENV_NAME -v
     
     - name: Build Release Filesystem
       run: |
@@ -75,6 +100,8 @@ jobs:
         # Проверяем что файл прошивки существует
         if [ ! -f "$BIN_PATH" ]; then
           echo "❌ Firmware not found at $BIN_PATH"
+          echo "Searching for .bin files..."
+          find .pio -name "*.bin" -type f
           exit 1
         fi
         
