@@ -1,0 +1,215 @@
+name: OTA Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for release (e.g., 1.2.3)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release?'
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: 'PlatformIO environment'
+        required: false
+        default: 'huzzah'
+        type: string
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Extract Info
+      id: info
+      run: |
+        VERSION="${{ inputs.version }}"
+        REPO_NAME="${{ github.event.repository.name }}"
+        ENV_NAME="${{ inputs.environment }}"
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+        echo "firmware_name=$REPO_NAME-firmware" >> $GITHUB_OUTPUT
+        echo "filesystem_name=$REPO_NAME-filesystem" >> $GITHUB_OUTPUT
+        echo "environment=$ENV_NAME" >> $GITHUB_OUTPUT
+        
+        echo "Building $REPO_NAME v$VERSION for $ENV_NAME"
+    
+    - name: Setup PlatformIO
+      run: pip install platformio
+
+    - name: Build Release Firmware
+      run: |
+        ENV_NAME="${{ steps.info.outputs.environment }}"
+        
+        # Чистая сборка
+        pio run -e $ENV_NAME -t clean
+        
+        # Сборка
+        pio run -e $ENV_NAME
+    
+    - name: Build Release Filesystem
+      run: |
+        ENV_NAME="${{ steps.info.outputs.environment }}"
+        echo "Building Release Filesystem..."
+        pio run -t buildfs -e $ENV_NAME
+
+    - name: Generate OTA Files
+      run: |
+        mkdir -p release
+        
+        VERSION="${{ steps.info.outputs.version }}"
+        FIRMWARE_NAME="${{ steps.info.outputs.firmware_name }}"
+        FILESYSTEM_NAME="${{ steps.info.outputs.filesystem_name }}"
+        ENV_NAME="${{ steps.info.outputs.environment }}"
+        BIN_PATH=".pio/build/$ENV_NAME/firmware.bin"
+        
+        # Проверяем что файл прошивки существует
+        if [ ! -f "$BIN_PATH" ]; then
+          echo "❌ Firmware not found at $BIN_PATH"
+          exit 1
+        fi
+        
+        # Копируем прошивку
+        cp $BIN_PATH release/$FIRMWARE_NAME-$VERSION.bin
+        
+        # Ищем файловую систему
+        FS_FOUND=false
+        if [ -f ".pio/build/$ENV_NAME/spiffs.bin" ]; then
+          cp .pio/build/$ENV_NAME/spiffs.bin release/$FILESYSTEM_NAME-$VERSION.bin
+          FS_PATH=".pio/build/$ENV_NAME/spiffs.bin"
+          FS_FOUND=true
+        elif [ -f ".pio/build/$ENV_NAME/littlefs.bin" ]; then
+          cp .pio/build/$ENV_NAME/littlefs.bin release/$FILESYSTEM_NAME-$VERSION.bin
+          FS_PATH=".pio/build/$ENV_NAME/littlefs.bin"
+          FS_FOUND=true
+        fi
+        
+        # Вычисляем хеши для прошивки
+        MD5=$(md5sum $BIN_PATH | awk '{print $1}')
+        SHA256=$(sha256sum $BIN_PATH | awk '{print $1}')
+        SIZE=$(stat -c%s $BIN_PATH)
+        
+        echo "📦 Firmware: $FIRMWARE_NAME-$VERSION.bin"
+        echo "   MD5: $MD5"
+        echo "   SHA256: $SHA256"
+        echo "   Size: $SIZE bytes"
+        
+        # Создаём firmware.json
+        cat > release/firmware.json <<EOF
+        {
+          "project": "${{ steps.info.outputs.repo_name }}",
+          "version": "$VERSION",
+          "environment": "$ENV_NAME",
+          "firmware": {
+            "name": "$FIRMWARE_NAME-$VERSION.bin",
+            "url": "https://github.com/${{ github.repository }}/releases/download/v$VERSION/$FIRMWARE_NAME-$VERSION.bin",
+            "checksum": "$MD5",
+            "sha256": "$SHA256",
+            "size": $SIZE
+          }
+        EOF
+        
+        # Добавляем информацию о файловой системе, если она есть
+        if [ "$FS_FOUND" = true ]; then
+          FS_MD5=$(md5sum "$FS_PATH" | awk '{print $1}')
+          FS_SHA256=$(sha256sum "$FS_PATH" | awk '{print $1}')
+          FS_SIZE=$(stat -c%s "$FS_PATH")
+          
+          echo "📦 Filesystem: $FILESYSTEM_NAME-$VERSION.bin"
+          echo "   MD5: $FS_MD5"
+          echo "   SHA256: $FS_SHA256"
+          echo "   Size: $FS_SIZE bytes"
+          
+          cat >> release/firmware.json <<EOF
+          ,
+          "filesystem": {
+            "name": "$FILESYSTEM_NAME-$VERSION.bin",
+            "url": "https://github.com/${{ github.repository }}/releases/download/v$VERSION/$FILESYSTEM_NAME-$VERSION.bin",
+            "checksum": "$FS_MD5",
+            "sha256": "$FS_SHA256",
+            "size": $FS_SIZE
+          }
+        EOF
+        fi
+        
+        # Добавляем дату сборки и информацию о репозитории
+        cat >> release/firmware.json <<EOF
+          ,
+          "build_info": {
+            "date": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "repository": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "ref": "${{ github.ref }}"
+          }
+        }
+        EOF
+        
+        # Генерируем changelog
+        echo "# Release v$VERSION" > release/CHANGELOG.md
+        echo "" >> release/CHANGELOG.md
+        echo "## 📦 Build Info" >> release/CHANGELOG.md
+        echo "- **Project:** ${{ steps.info.outputs.repo_name }}" >> release/CHANGELOG.md
+        echo "- **Environment:** $ENV_NAME" >> release/CHANGELOG.md
+        echo "- **Commit:** ${{ github.sha }}" >> release/CHANGELOG.md
+        echo "- **Build Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> release/CHANGELOG.md
+        
+        # Размеры файлов
+        echo "" >> release/CHANGELOG.md
+        echo "## 📊 File Sizes" >> release/CHANGELOG.md
+        echo "- **Firmware:** $SIZE bytes ($(numfmt --to=iec $SIZE 2>/dev/null || echo "$SIZE bytes"))" >> release/CHANGELOG.md
+        if [ "$FS_FOUND" = true ]; then
+          echo "- **Filesystem:** $FS_SIZE bytes ($(numfmt --to=iec $FS_SIZE 2>/dev/null || echo "$FS_SIZE bytes"))" >> release/CHANGELOG.md
+        fi
+        
+        echo "" >> release/CHANGELOG.md
+        echo "## 🔄 Changes" >> release/CHANGELOG.md
+        
+        # Находим предыдущий тег
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -n "$PREV_TAG" ]; then
+          echo "**Since $PREV_TAG:**" >> release/CHANGELOG.md
+          echo "" >> release/CHANGELOG.md
+          git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> release/CHANGELOG.md
+        else
+          echo "**Latest commits:**" >> release/CHANGELOG.md
+          echo "" >> release/CHANGELOG.md
+          git log --pretty=format:"- %s (%h)" -10 >> release/CHANGELOG.md
+        fi
+        
+        # Показываем содержимое release директории
+        echo ""
+        echo "📁 Release contents:"
+        ls -la release/
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: "v${{ steps.info.outputs.version }} - ${{ steps.info.outputs.repo_name }}"
+        body_path: release/CHANGELOG.md
+        files: |
+          release/*.bin
+          release/*.json
+          release/*.md
+        draft: false
+        prerelease: ${{ inputs.prerelease }}
+        tag_name: "v${{ steps.info.outputs.version }}"
+
+    - name: Create Tag
+      run: |
+        VERSION="${{ steps.info.outputs.version }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "v$VERSION" -m "Release v$VERSION"
+        git push origin "v$VERSION"
+        
+        echo "✅ Tag v$VERSION created and pushed"
