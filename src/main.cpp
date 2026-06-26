@@ -40,21 +40,21 @@ void drawHeader()
 
 void drawSidebar()
 {
-    tft.fillRect(0, HEADER_H, SIDEBAR_W, H - HEADER_H, PANEL2);
+    tft.fillRoundRect(0, HEADER_H, SIDEBAR_W, H - HEADER_H, 6, PANEL);
 
-    tft.setTextColor(TEXT, PANEL2);
+    tft.setTextColor(TEXT, PANEL);
     tft.drawString("MENU", 10, 35, 2);
 
-    tft.setTextColor(BLUE, PANEL2);
+    tft.setTextColor(BLUE, PANEL);
     tft.drawString("READ", 10, 70, 2);
 
-    tft.setTextColor(GREEN, PANEL2);
+    tft.setTextColor(GREEN, PANEL);
     tft.drawString("WRITE", 10, 100, 2);
 
-    tft.setTextColor(PURPLE, PANEL2);
+    tft.setTextColor(PURPLE, PANEL);
     tft.drawString("VERIFY", 10, 130, 2);
 
-    tft.setTextColor(ORANGE, PANEL2);
+    tft.setTextColor(ORANGE, PANEL);
     tft.drawString("SAVE", 10, 160, 2);
 }
 
@@ -66,14 +66,12 @@ void drawChipInfo()
     tft.fillRoundRect(x, y, 240, 55, 6, PANEL);
 
     tft.setTextColor(TEXT, PANEL);
-
     tft.drawString("MODEL:", x + 6, y + 6, 2);
-    tft.drawString("HP 85A", x + 70, y + 6, 2);
-
-    tft.drawString("TYPE:", x + 6, y + 24, 2);
-    tft.drawString("HP Auto", x + 70, y + 24, 2);
-
     tft.drawString("ID:", x + 6, y + 42, 2);
+    tft.drawString("TYPE:", x + 6, y + 24, 2);
+    tft.setTextColor(BLUE, PANEL);
+    tft.drawString("HP 85A", x + 70, y + 6, 2);
+    tft.drawString("HP Auto", x + 70, y + 24, 2);
     tft.drawString("0x1FC7", x + 70, y + 42, 2);
 }
 
